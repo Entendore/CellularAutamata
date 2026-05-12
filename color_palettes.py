@@ -84,6 +84,10 @@ class Color:
             int(self.b + (other.b - self.b) * t),
             int(self.a + (other.a - self.a) * t)
         )
+    
+    def brightness(self) -> float:
+        """Get perceived brightness (0-255)."""
+        return (self.r * 299 + self.g * 587 + self.b * 114) / 1000
 
 
 @dataclass
@@ -254,6 +258,16 @@ BUILTIN_PALETTES: Dict[str, Palette] = {
         colors=[Color(0,0,0), Color(33,0,100), Color(0,0,255), Color(0,255,255), Color(0,255,0), Color(255,255,0), Color(255,0,0), Color(255,255,255)],
         background_color=Color(0,0,0)
     ),
+    "Amber": Palette(
+        name="Amber", palette_type=PaletteType.SEQUENTIAL, description="Amber/retro terminal style",
+        colors=[Color(50,30,0), Color(150,100,0), Color(200,150,50), Color(255,200,100), Color(255,235,180)],
+        background_color=Color(10,5,0)
+    ),
+    "Ice": Palette(
+        name="Ice", palette_type=PaletteType.SEQUENTIAL, description="Frozen ice colors",
+        colors=[Color(100,150,200), Color(150,200,230), Color(200,230,250), Color(230,245,255), Color(250,252,255)],
+        background_color=Color(20,30,50)
+    ),
 }
 
 
@@ -356,16 +370,16 @@ class PaletteManager:
         except Exception: 
             return False
 
-    def import_palette(self, path: str) -> bool:
-        """Import palette from JSON file."""
+    def import_palette(self, path: str) -> Tuple[bool, str]:
+        """Import palette from JSON file. Returns (success, message)."""
         try:
             with open(path, 'r') as f: 
                 data = json.load(f)
             palette = Palette.from_json(data)
             self._custom_palettes[palette.name] = palette
-            return True
-        except Exception: 
-            return False
+            return True, f"Imported palette: {palette.name}"
+        except Exception as e: 
+            return False, f"Import failed: {str(e)}"
 
 
 # =====================================================================
@@ -424,14 +438,11 @@ class NoiseColoring:
         noise_rows = max(2, int(rows * self.scale))
         noise_cols = max(2, int(cols * self.scale))
         
-        # Generate base random grid
         base = rng.rand(noise_rows, noise_cols)
         
-        # Bilinear interpolation to full size using numpy
         row_indices = np.linspace(0, noise_rows - 1, rows)
         col_indices = np.linspace(0, noise_cols - 1, cols)
         
-        # Calculate interpolation weights
         r0 = np.floor(row_indices).astype(int)
         c0 = np.floor(col_indices).astype(int)
         r1 = np.minimum(r0 + 1, noise_rows - 1)
@@ -440,12 +451,10 @@ class NoiseColoring:
         dr = (row_indices - r0)[:, np.newaxis]
         dc = (col_indices - c0)[np.newaxis, :]
         
-        # Interpolate - fixed 2D indexing
         top = base[np.ix_(r0, c0)] * (1 - dc) + base[np.ix_(r0, c1)] * dc
         bottom = base[np.ix_(r1, c0)] * (1 - dc) + base[np.ix_(r1, c1)] * dc
         noise = top * (1 - dr) + bottom * dr
         
-        # Normalize 0-1
         mn, mx = noise.min(), noise.max()
         if mx - mn > 0: 
             noise = (noise - mn) / (mx - mn)
@@ -478,10 +487,10 @@ class TransitionColorSystem:
         self._progress = 0.0
 
     def update(self, dt: float) -> bool:
-        self._progress += dt * 6.0  # Transition speed
+        self._progress += dt * 6.0
         if self._progress >= 1.0:
             self._progress = 1.0
-            return True  # Complete
+            return True
         return False
 
     def get_blended_colors(self, current_grid: np.ndarray, color_lut: np.ndarray) -> np.ndarray:

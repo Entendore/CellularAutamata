@@ -16,6 +16,9 @@ import numpy as np
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass, field
 from enum import Enum
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class VisualMode(Enum):
@@ -24,7 +27,6 @@ class VisualMode(Enum):
     AGE = "age"
     HEATMAP = "heatmap"
     NEIGHBOR_COUNT = "neighbor_count"
-    VELOCITY = "velocity"
     OUTLINE = "outline"
     GRADIENT = "gradient"
 
@@ -135,6 +137,8 @@ class AgeTracker:
                 lut[age] = self._hot_colormap(t)
             elif palette == "rainbow":
                 lut[age] = self._rainbow_colormap(t)
+            elif palette == "amber":
+                lut[age] = self._amber_colormap(t)
             else:
                 lut[age] = self._plasma_colormap(t)
         
@@ -169,7 +173,7 @@ class AgeTracker:
         """Cool colormap (cyan to magenta)."""
         r = int(255 * t)
         g = int(255 * (1 - t))
-        b = int(255)
+        b = 255
         return (r, g, b)
     
     @staticmethod
@@ -204,6 +208,14 @@ class AgeTracker:
             r, g, b = x, 0, c
         
         return (int(255 * r), int(255 * g), int(255 * b))
+    
+    @staticmethod
+    def _amber_colormap(t: float) -> Tuple[int, int, int]:
+        """Amber colormap for retro terminal look."""
+        r = int(255 * min(1, 0.2 + 0.8 * t**0.5))
+        g = int(255 * min(1, 0.1 + 0.6 * t))
+        b = int(255 * min(1, 0.05 * t))
+        return (r, g, b)
 
 
 class HeatmapTracker:
@@ -212,7 +224,7 @@ class HeatmapTracker:
     def __init__(self, rows: int, cols: int, history_length: int = 100):
         self.rows = rows
         self.cols = cols
-        self.history_length = history_length
+        self.history_length = max(1, history_length)
         self.history: List[np.ndarray] = []
     
     def update(self, grid: np.ndarray) -> None:
@@ -221,7 +233,7 @@ class HeatmapTracker:
         self.history.append(alive)
         
         # Keep only recent history
-        if len(self.history) > self.history_length:
+        while len(self.history) > self.history_length:
             self.history.pop(0)
     
     def get_heatmap(self) -> np.ndarray:
@@ -266,6 +278,12 @@ class HeatmapTracker:
     def reset(self) -> None:
         """Clear history."""
         self.history.clear()
+    
+    def set_history_length(self, length: int) -> None:
+        """Set maximum history length."""
+        self.history_length = max(1, length)
+        while len(self.history) > self.history_length:
+            self.history.pop(0)
 
 
 class BirthDeathTracker:
@@ -361,6 +379,7 @@ class GlowEffect:
             self._has_scipy = True
         except ImportError:
             self._has_scipy = False
+            logger.debug("scipy not available, glow effect disabled")
     
     def _update_kernel(self) -> None:
         """Create glow kernel."""
@@ -376,8 +395,7 @@ class GlowEffect:
     
     def apply(self, grid: np.ndarray, color_lut: np.ndarray) -> np.ndarray:
         """Apply glow effect to grid."""
-        if not self._has_scipy:
-            # Fallback: just return base colors without glow
+        if not self._has_scipy or np.sum(grid > 0) == 0:
             return color_lut[grid]
         
         try:
@@ -404,8 +422,8 @@ class GlowEffect:
                 )
             
             return rgb.astype(np.uint8)
-        except Exception:
-            # Fallback on any error
+        except Exception as e:
+            logger.warning(f"Glow effect error: {e}")
             return color_lut[grid]
     
     def set_radius(self, radius: int) -> None:
@@ -417,6 +435,11 @@ class GlowEffect:
         """Set glow intensity."""
         self.intensity = max(0.0, min(1.0, intensity))
         self._update_kernel()
+    
+    @property
+    def is_available(self) -> bool:
+        """Check if glow effect is available."""
+        return self._has_scipy
 
 
 class OutlineRenderer:
@@ -518,12 +541,10 @@ class VignetteEffect:
         y, x = np.ogrid[:h, :w]
         center_y, center_x = h / 2, w / 2
         
-        # Calculate distance from center (normalized)
         dist = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
         max_dist = np.sqrt(center_x ** 2 + center_y ** 2)
         dist = dist / max_dist
         
-        # Create vignette
         self._vignette_mask = 1 - self.strength * dist ** 2
         self._vignette_mask = np.clip(self._vignette_mask, 0, 1).astype(np.float32)
     
@@ -544,7 +565,6 @@ class GradientOverlay:
         """Apply gradient overlay."""
         h, w, _ = rgb.shape
         
-        # Generate gradient
         if self.direction == "vertical":
             t = np.linspace(0, 1, h)[:, np.newaxis]
             t = np.broadcast_to(t, (h, w))
@@ -557,11 +577,9 @@ class GradientOverlay:
             max_dist = np.sqrt((w/2) ** 2 + (h/2) ** 2)
             t = dist / max_dist
         
-        # Interpolate colors
         gradient = np.zeros((h, w, 3), dtype=np.float32)
         for i in range(3):
             gradient[:, :, i] = color1[i] * (1 - t) + color2[i] * t
         
-        # Blend
         result = rgb.astype(np.float32) * (1 - alpha) + gradient * alpha
         return result.astype(np.uint8)
